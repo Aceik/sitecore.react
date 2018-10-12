@@ -6,6 +6,7 @@
         string DynamicPlaceholderType { get; set; }
         string BundleName { get; set; }
         bool EnableClientside { get; set; }
+        bool EnableGroupedClientsideScripts { get; set; }
         bool DisableClientSideWhenEditing { get; set; }
         string BundleType { get; set; }
         string ServerScript { get; set; }

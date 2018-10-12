@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Dynamic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
 using System.Web.Mvc;
@@ -23,9 +24,11 @@ namespace Sitecore.React.Mvc
 	/// <summary>Represents the class used to create views that have Razor syntax.</summary>
 	public class JsxView : BuildManagerCompiledView
 	{
-		/// <summary>Gets the layout or master page.</summary>
-		/// <returns>The layout or master page.</returns>
-		public string LayoutPath { get; private set; }
+	    private static Dictionary<string, List<string>> scripts = new Dictionary<string, List<string>>();
+
+        /// <summary>Gets the layout or master page.</summary>
+        /// <returns>The layout or master page.</returns>
+        public string LayoutPath { get; private set; }
 
 		/// <summary>Gets a value that indicates whether view start files should be executed before the view.</summary>
 		/// <returns>A value that indicates whether view start files should be executed before the view.</returns>
@@ -98,7 +101,20 @@ namespace Sitecore.React.Mvc
 
 		    IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props);
             bool isEditingOverrideEnabled = ReactSettingsProvider.Current.DisableClientSideWhenEditing && Sitecore.Context.PageMode.IsExperienceEditorEditing;
-            if (ReactSettingsProvider.Current.EnableClientside && !isEditingOverrideEnabled)
+
+		    bool enableClientSide = ReactSettingsProvider.Current.EnableClientside && !isEditingOverrideEnabled;
+
+            // Client side bundling 
+            // Added by Thomas Tyack. https://aceik.com.au/2018/06/28/sitecore-page-speed-part-3-eliminate-js-loading-time/  
+            // Page Speed updates allowing all the javascript loading to be defered. 
+		    bool hasDynamicLoadingEnabled = Context.Item.Fields.Any(x => x.Name.Equals("EnableDynamicScriptLoadingOnPage") && x.Value == "1");
+            bool enableClientSideBundle = ReactSettingsProvider.Current.EnableGroupedClientsideScripts && hasDynamicLoadingEnabled && !isEditingOverrideEnabled;
+
+		    if (enableClientSideBundle)
+		    {
+		        writer.WriteLine(reactComponent.RenderHtml(false, true));
+		        this.ConstructFastBundle(reactComponent);
+            } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
 
@@ -131,7 +147,63 @@ namespace Sitecore.React.Mvc
 			}
 		}
 
-		protected virtual string[] GetPlaceholders(string viewPath)
+	    private void ConstructFastBundle(IReactComponent reactComponent)
+	    {
+	        string tagBuilder = reactComponent.RenderJavaScript() + " " + System.Environment.NewLine;
+	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
+	        bool flag = JsxView.scripts.ContainsKey(pageKey);
+	        if (flag)
+	        {
+	            JsxView.scripts[pageKey].Add(tagBuilder);
+	        }
+	        else
+	        {
+	            List<string> builder = new List<string>();
+	            builder.Add(tagBuilder);
+	            JsxView.scripts.Add(pageKey, builder);
+	        }
+	    }
+
+	    public static HtmlString RenderPageScripts()
+	    {
+	        HtmlString pageScripts = new HtmlString("");
+	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
+	        bool flag = JsxView.scripts.ContainsKey(pageKey);
+	        if (flag)
+	        {
+	            StringBuilder scriptBuilder = new StringBuilder();
+	            scriptBuilder.Append("function reactClientsBootstrap(){");
+	            foreach (string script in JsxView.scripts[pageKey])
+	            {
+	                scriptBuilder.Append(script.ToString());
+	            }
+	            scriptBuilder.Append("}");
+	            TagBuilder tagBuilder = new TagBuilder("script")
+	            {
+	                InnerHtml = scriptBuilder.ToString()
+	            };
+	            pageScripts = new HtmlString(tagBuilder.ToString());
+	        }
+	        JsxView.scripts.Remove(pageKey);
+	        return pageScripts;
+	    }
+
+	    public static string GetPageKey(HttpRequest request)
+	    {
+	        string key = request.Url.PathAndQuery;
+	        bool flag = key == "/";
+	        if (flag)
+	        {
+	            key = "homepage";
+	        }
+	        else
+	        {
+	            key = request.Url.PathAndQuery.Replace("/", "_");
+	        }
+	        return key;
+	    }
+
+        protected virtual string[] GetPlaceholders(string viewPath)
 		{
 			const string noPlaceholders = "NONE";
 
