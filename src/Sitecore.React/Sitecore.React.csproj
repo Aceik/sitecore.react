@@ -162,6 +162,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="App_Start\ReactConfig.cs" />
+    <Compile Include="Cache\CustomSitecoreCacheService.cs" />
+    <Compile Include="Cache\BaseSitecoreCache.cs" />
     <Compile Include="Configuration\IReactSettings.cs" />
     <Compile Include="Configuration\ReactSettingsProvider.cs" />
     <Compile Include="Configuration\ReactSettings.cs" />
@@ -186,6 +188,7 @@
     <Content Include="App_Config\Include\Sitecore.React\Sitecore.React.Serialization.config">
       <SubType>Designer</SubType>
     </Content>
+    <Content Include="App_Config\Include\Sitecore.React\Sitecore.React.CustomCache.config" />
     <None Include="Properties\PublishProfiles\Local.pubxml" />
     <Content Include="Views\web.config" />
     <None Include="Web.config">
@@ -199,9 +202,7 @@
       <DependentUpon>Web.config</DependentUpon>
     </None>
   </ItemGroup>
-  <ItemGroup>
-    <Folder Include="Cache\" />
-  </ItemGroup>
+  <ItemGroup />
   <PropertyGroup>
     <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">10.0</VisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>

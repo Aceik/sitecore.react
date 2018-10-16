@@ -18,14 +18,13 @@ using ReactEnvironment = React.ReactEnvironment;
 using ReactNotInitialisedException = React.Exceptions.ReactNotInitialisedException;
 using TinyIoCResolutionException = React.TinyIoC.TinyIoCResolutionException;
 using Sitecore.React.Configuration;
+using Sitecore.React.Cache;
 
 namespace Sitecore.React.Mvc
 {
 	/// <summary>Represents the class used to create views that have Razor syntax.</summary>
 	public class JsxView : BuildManagerCompiledView
 	{
-	    private static Dictionary<string, List<string>> scripts = new Dictionary<string, List<string>>();
-
         /// <summary>Gets the layout or master page.</summary>
         /// <returns>The layout or master page.</returns>
         public string LayoutPath { get; private set; }
@@ -41,6 +40,11 @@ namespace Sitecore.React.Mvc
 		/// <summary>Gets or sets the set of file extensions that will be used when looking up view start files.</summary>
 		/// <returns>The set of file extensions that will be used when looking up view start files.</returns>
 		public IEnumerable<string> ViewStartFileExtensions { get; private set; }
+
+        /// <summary>
+        /// The bundle cache was added so that we can defer load async on scripts by wrapping all JSX client side code with a bootstrap method.
+        /// </summary>
+        private CustomCacheService _bundleCache = new CustomCacheService();
 
 		/// <summary>Initializes a new instance of the <see cref="T:System.Web.Mvc.RazorView" /> class.</summary>
 		/// <param name="controllerContext">The controller context.</param>
@@ -149,20 +153,33 @@ namespace Sitecore.React.Mvc
 
 	    private void ConstructFastBundle(IReactComponent reactComponent)
 	    {
-	        string tagBuilder = reactComponent.RenderJavaScript() + " " + System.Environment.NewLine;
 	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
-	        bool flag = JsxView.scripts.ContainsKey(pageKey);
-	        if (flag)
-	        {
-	            JsxView.scripts[pageKey].Add(tagBuilder);
-	        }
-	        else
-	        {
-	            List<string> builder = new List<string>();
-	            builder.Add(tagBuilder);
-	            JsxView.scripts.Add(pageKey, builder);
-	        }
-	    }
+
+            // Lookup the rendering script for this rendering
+            var renderingJavascript = _bundleCache.GetOrAddToCache(
+                reactComponent.ContainerId,
+                () =>
+                {
+                    return reactComponent.RenderJavaScript() + " " + System.Environment.NewLine;
+                });
+
+            // Lookup the bundle see if it already exists in cache. If not create it.
+            PageBundle bundle = _bundleCache.GetOrAddToCache<PageBundle>(
+                pageKey,
+                () =>
+                {
+                    var newBundle = new PageBundle() { PageKey = pageKey, ComponentBundle = new Dictionary<string, string>() };
+                    newBundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
+                    return newBundle;
+                });
+
+            if(!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
+            {
+                bundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
+            }
+
+            _bundleCache.Set(pageKey, bundle);
+        }
 
 	    public static HtmlString RenderPageScripts()
 	    {
