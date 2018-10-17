@@ -1,7 +1,7 @@
 ﻿using System;
-using Sitecore;
 using Sitecore.Caching;
-namespace Sitecore.React
+
+namespace Sitecore.React.Cache
 {
     public abstract class BaseSitecoreCache : CustomCache
     {
@@ -13,8 +13,8 @@ namespace Sitecore.React
         }
         public virtual bool CacheEnabled
         {
-            get => Context.PageMode.IsNormal && _cacheEnabled;
-            set => _cacheEnabled = value;
+            get { return Context.PageMode.IsNormal && _cacheEnabled; }
+            set {  _cacheEnabled = value; }
         }
         public void ClearCache(object sender, EventArgs args)
         {

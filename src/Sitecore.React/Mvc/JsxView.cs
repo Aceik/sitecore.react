@@ -102,8 +102,11 @@ namespace Sitecore.React.Mvc
 			var placeholderKeys = this.GetPlaceholders(this.ViewPath);
 			var componentName = Path.GetFileNameWithoutExtension(this.ViewPath)?.Replace("-", string.Empty);
 			var props = this.GetProps(viewContext.ViewData.Model, placeholderKeys);
+		    string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
 
-		    IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props);
+		    var componentId = GetComponentRenderingContextKey(pageKey, componentName, String.Join("|", placeholderKeys));
+
+            IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props, componentId);
             bool isEditingOverrideEnabled = ReactSettingsProvider.Current.DisableClientSideWhenEditing && Sitecore.Context.PageMode.IsExperienceEditorEditing;
 
 		    bool enableClientSide = ReactSettingsProvider.Current.EnableClientside && !isEditingOverrideEnabled;
@@ -117,7 +120,7 @@ namespace Sitecore.React.Mvc
 		    if (enableClientSideBundle)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml(false, true));
-		        this.ConstructFastBundle(reactComponent);
+		        this.ConstructFastBundle(pageKey, reactComponent);
             } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
@@ -151,10 +154,8 @@ namespace Sitecore.React.Mvc
 			}
 		}
 
-	    private void ConstructFastBundle(IReactComponent reactComponent)
+	    private void ConstructFastBundle(string pageKey, IReactComponent reactComponent)
 	    {
-	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
-
             // Lookup the rendering script for this rendering
             var renderingJavascript = _bundleCache.GetOrAddToCache(
                 reactComponent.ContainerId,
@@ -176,21 +177,32 @@ namespace Sitecore.React.Mvc
             if(!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
             {
                 bundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
+                _bundleCache.Set(pageKey, bundle);
             }
-
-            _bundleCache.Set(pageKey, bundle);
         }
+
+	    private string GetComponentRenderingContextKey(string pageKey, string name, string placeholderKeys)
+	    {
+            var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
+	        //var contextItemId = RenderingContext.Current.ContextItem?.ID.ToShortID().ToString();
+
+	        string componentId = $"{pageKey}:{name}:{datasourceId}";
+
+	        return componentId;
+	    }
 
 	    public static HtmlString RenderPageScripts()
 	    {
-	        HtmlString pageScripts = new HtmlString("");
+	        CustomCacheService bundleCacheRef = new CustomCacheService();
+
+            HtmlString pageScripts = new HtmlString("");
 	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
-	        bool flag = JsxView.scripts.ContainsKey(pageKey);
-	        if (flag)
+	        var pageBundle = bundleCacheRef.Get<PageBundle>(pageKey);
+	        if (pageBundle != null)
 	        {
 	            StringBuilder scriptBuilder = new StringBuilder();
 	            scriptBuilder.Append("function reactClientsBootstrap(){");
-	            foreach (string script in JsxView.scripts[pageKey])
+	            foreach (string script in pageBundle.ComponentBundle.Values)
 	            {
 	                scriptBuilder.Append(script.ToString());
 	            }
@@ -201,7 +213,6 @@ namespace Sitecore.React.Mvc
 	            };
 	            pageScripts = new HtmlString(tagBuilder.ToString());
 	        }
-	        JsxView.scripts.Remove(pageKey);
 	        return pageScripts;
 	    }
 
@@ -211,7 +222,12 @@ namespace Sitecore.React.Mvc
 	        bool flag = key == "/";
 	        if (flag)
 	        {
-	            key = "homepage";
+	            string contextItemId = string.Empty;
+	            if (RenderingContext.Current.ContextItem != null)
+	            {
+	                contextItemId = RenderingContext.Current.PageContext.Item?.ID.ToShortID().ToString();
+                }
+	            key = "homepage-"+ contextItemId;
 	        }
 	        else
 	        {
