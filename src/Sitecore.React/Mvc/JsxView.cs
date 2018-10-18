@@ -124,8 +124,8 @@ namespace Sitecore.React.Mvc
 
 		    if (enableClientSideBundle)
 		    {
-		        writer.WriteLine(reactComponent.RenderHtml(false, true));
-		        this.ConstructFastBundle(pageKey, reactComponent);
+		        writer.WriteLine(reactComponent.RenderHtml(false, true)); // Render the markup but not the client side JS yet.
+		        this.ConstructFastBundle(pageKey, reactComponent); // Add the client side JS to a bundle for rendering at the end of the page.
             } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
@@ -159,6 +159,11 @@ namespace Sitecore.React.Mvc
 			}
 		}
 
+        /// <summary>
+        /// Adds a component to the bundle for a particular page. 
+        /// </summary>
+        /// <param name="pageKey">The Page ID</param>
+        /// <param name="reactComponent">The React component to add.</param>
 	    private void ConstructFastBundle(string pageKey, IReactComponent reactComponent)
 	    {
             // Lookup the rendering script for this rendering
@@ -186,16 +191,27 @@ namespace Sitecore.React.Mvc
             }
         }
 
+        /// <summary>
+        /// Generates a component key, for the bundling cache.
+        /// Takes into consideration content ITem, component name, databasrouce and Personalisation rules.
+        /// </summary>
+        /// <param name="pageKey"></param>
+        /// <param name="name"></param>
+        /// <param name="placeholderKeys"></param>
+        /// <returns></returns>
 	    private string GetComponentRenderingContextKey(string pageKey, string name, string placeholderKeys)
 	    {
             var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
-	        //var contextItemId = RenderingContext.Current.ContextItem?.ID.ToShortID().ToString();
-
 	        string componentId = $"{pageKey}:{name}:{datasourceId}:{GeneratePersonlisationKey()}";
 
 	        return componentId;
 	    }
 
+        /// <summary>
+        /// Use this tool on your layout page to rendering the client side scripting bundle inline.
+        /// Call reactClientsBootstrap()  to bootstrap/initialise the javacript code.
+        /// </summary>
+        /// <returns></returns>
         public static HtmlString RenderPageScripts()
 	    {
 	        CustomCacheService bundleCacheRef = new CustomCacheService();
