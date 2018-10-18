@@ -8,8 +8,11 @@ using System.Text.RegularExpressions;
 using System.Web;
 using System.Web.Mvc;
 using System.Web.WebPages;
+using Sitecore.Data;
 using Sitecore.Extensions.StringExtensions;
+using Sitecore.Layouts;
 using Sitecore.Mvc;
+using Sitecore.Mvc.Pipelines.Response.RenderRendering;
 using Sitecore.Mvc.Presentation;
 using HtmlHelperExtensions = React.Web.Mvc.HtmlHelperExtensions;
 using IReactComponent = React.IReactComponent;
@@ -19,6 +22,8 @@ using ReactNotInitialisedException = React.Exceptions.ReactNotInitialisedExcepti
 using TinyIoCResolutionException = React.TinyIoC.TinyIoCResolutionException;
 using Sitecore.React.Configuration;
 using Sitecore.React.Cache;
+using Sitecore.Rules.ConditionalRenderings;
+using PageContext = Sitecore.Mvc.Presentation.PageContext;
 
 namespace Sitecore.React.Mvc
 {
@@ -186,12 +191,12 @@ namespace Sitecore.React.Mvc
             var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
 	        //var contextItemId = RenderingContext.Current.ContextItem?.ID.ToShortID().ToString();
 
-	        string componentId = $"{pageKey}:{name}:{datasourceId}";
+	        string componentId = $"{pageKey}:{name}:{datasourceId}:{GeneratePersonlisationKey()}";
 
 	        return componentId;
 	    }
 
-	    public static HtmlString RenderPageScripts()
+        public static HtmlString RenderPageScripts()
 	    {
 	        CustomCacheService bundleCacheRef = new CustomCacheService();
 
@@ -342,5 +347,46 @@ namespace Sitecore.React.Mvc
 
 			return props;
 		}
-	}
+
+        #region [Personalisation Key]
+	    public string GeneratePersonlisationKey()
+	    {
+	        string cacheKey = string.Empty;
+
+	        try
+	        {
+	            var allReferences = GetRenderingsForControl().ToList();
+	            var renderingUniqueId = ID.Parse(RenderingContext.Current.Rendering.UniqueId);
+	            var renderingReferrence = allReferences.FirstOrDefault(i => ID.Parse(i.UniqueId).Equals(renderingUniqueId));
+	            if (renderingReferrence != null)
+	            {
+	                var ruleContext = new ConditionalRenderingsRuleContext(allReferences, renderingReferrence);
+	                renderingReferrence.Settings.Rules.RunFirstMatching(ruleContext);
+
+	                string personalizedDatasource = ruleContext.Reference.Settings.DataSource;
+	                cacheKey += String.Concat("pd:", new ID(new Guid(personalizedDatasource)).ToShortID().ToString());
+	            }
+            }
+            catch (Exception ex)
+	        {
+                Sitecore.Diagnostics.Log.Error("Sitecore.React could not identify a personalisation", ex);
+	        }
+
+	        return cacheKey;
+	    }
+
+	    public RenderingReference[] GetRenderingsForControl()
+	    {
+	        var item = Sitecore.Context.Item;
+	        if (item != null)
+	        {
+	            var device = Sitecore.Context.Device;
+	            var renderings = item.Visualization.GetRenderings(device, true);
+
+	            return renderings;
+	        }
+	        return new RenderingReference[0];
+	    }
+        #endregion
+    }
 }
