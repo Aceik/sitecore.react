@@ -49,15 +49,15 @@ namespace Sitecore.React.Mvc
         /// <summary>
         /// The bundle cache was added so that we can defer load async on scripts by wrapping all JSX client side code with a bootstrap method.
         /// </summary>
-        private CustomCacheService _bundleCache = new CustomCacheService();
-
-		/// <summary>Initializes a new instance of the <see cref="T:System.Web.Mvc.RazorView" /> class.</summary>
-		/// <param name="controllerContext">The controller context.</param>
-		/// <param name="viewPath">The view path.</param>
-		/// <param name="layoutPath">The layout or master page.</param>
-		/// <param name="runViewStartPages">A value that indicates whether view start files should be executed before the view.</param>
-		/// <param name="viewStartFileExtensions">The set of extensions that will be used when looking up view start files.</param>
-		public JsxView(ControllerContext controllerContext, string viewPath, string layoutPath, bool runViewStartPages, IEnumerable<string> viewStartFileExtensions)
+        private static CustomCacheService _bundleCache = new CustomCacheService();
+        
+        /// <summary>Initializes a new instance of the <see cref="T:System.Web.Mvc.RazorView" /> class.</summary>
+        /// <param name="controllerContext">The controller context.</param>
+        /// <param name="viewPath">The view path.</param>
+        /// <param name="layoutPath">The layout or master page.</param>
+        /// <param name="runViewStartPages">A value that indicates whether view start files should be executed before the view.</param>
+        /// <param name="viewStartFileExtensions">The set of extensions that will be used when looking up view start files.</param>
+        public JsxView(ControllerContext controllerContext, string viewPath, string layoutPath, bool runViewStartPages, IEnumerable<string> viewStartFileExtensions)
 		  : this(controllerContext, viewPath, layoutPath, runViewStartPages, viewStartFileExtensions, null)
 		{
 		}
@@ -107,7 +107,7 @@ namespace Sitecore.React.Mvc
 			var placeholderKeys = this.GetPlaceholders(this.ViewPath);
 			var componentName = Path.GetFileNameWithoutExtension(this.ViewPath)?.Replace("-", string.Empty);
 			var props = this.GetProps(viewContext.ViewData.Model, placeholderKeys);
-		    string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
+		    string pageKey = GetPageKey(HttpContext.Current.Request);
 
 		    var componentId = GetComponentRenderingContextKey(pageKey, componentName, String.Join("|", placeholderKeys));
 
@@ -171,24 +171,38 @@ namespace Sitecore.React.Mvc
                 reactComponent.ContainerId,
                 () =>
                 {
-                    return reactComponent.RenderJavaScript() + " " + System.Environment.NewLine;
+                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + reactComponent.RenderJavaScript() + " }" + System.Environment.NewLine);
                 });
 
-            // Lookup the bundle see if it already exists in cache. If not create it.
-            PageBundle bundle = _bundleCache.GetOrAddToCache<PageBundle>(
-                pageKey,
-                () =>
-                {
-                    var newBundle = new PageBundle() { PageKey = pageKey, ComponentBundle = new Dictionary<string, string>() };
-                    newBundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
-                    return newBundle;
-                });
+            var bundle = GetBundle(reactComponent, renderingJavascript);
+            string bundleObjKey = GetBundleKey();
 
-            if(!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
+            if (!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
             {
                 bundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
-                _bundleCache.Set(pageKey, bundle);
+                _bundleCache.Set(bundleObjKey, bundle);
+                _bundleCache.Set(GetBundleKey(isBundleObject: false, isBundleHtml: true), RenderPageScriptsFresh(bundle));
             }
+        }
+
+        private PageBundle GetBundle(IReactComponent reactComponent, string renderingJs)
+        {
+            string bundleObjKey = GetBundleKey();
+            var currentBundle = _bundleCache.Get<PageBundle>(bundleObjKey);
+            if (currentBundle == null)
+            {
+                // Lookup the bundle see if it already exists in cache. If not create it.
+                currentBundle = _bundleCache.GetOrAddToCache<PageBundle>(
+                    bundleObjKey,
+                    () =>
+                    {
+                        var newBundle = new PageBundle() { PageKey = bundleObjKey, ComponentBundle = new Dictionary<string, string>() };
+                        newBundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJs);
+                        return newBundle;
+                    });
+            }
+
+            return currentBundle;
         }
 
         /// <summary>
@@ -199,62 +213,12 @@ namespace Sitecore.React.Mvc
         /// <param name="name"></param>
         /// <param name="placeholderKeys"></param>
         /// <returns></returns>
-	    private string GetComponentRenderingContextKey(string pageKey, string name, string placeholderKeys)
+        private string GetComponentRenderingContextKey(string pageKey, string name, string placeholderKeys)
 	    {
             var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
 	        string componentId = $"{pageKey}:{name}:{datasourceId}:{GeneratePersonlisationKey()}";
 
 	        return componentId;
-	    }
-
-        /// <summary>
-        /// Use this tool on your layout page to rendering the client side scripting bundle inline.
-        /// Call reactClientsBootstrap()  to bootstrap/initialise the javacript code.
-        /// </summary>
-        /// <returns></returns>
-        public static HtmlString RenderPageScripts()
-	    {
-	        CustomCacheService bundleCacheRef = new CustomCacheService();
-
-            HtmlString pageScripts = new HtmlString("");
-	        string pageKey = JsxView.GetPageKey(HttpContext.Current.Request);
-	        var pageBundle = bundleCacheRef.Get<PageBundle>(pageKey);
-	        if (pageBundle != null)
-	        {
-	            StringBuilder scriptBuilder = new StringBuilder();
-	            scriptBuilder.Append("function reactClientsBootstrap(){");
-	            foreach (string script in pageBundle.ComponentBundle.Values)
-	            {
-	                scriptBuilder.Append(script.ToString());
-	            }
-	            scriptBuilder.Append("}");
-	            TagBuilder tagBuilder = new TagBuilder("script")
-	            {
-	                InnerHtml = scriptBuilder.ToString()
-	            };
-	            pageScripts = new HtmlString(tagBuilder.ToString());
-	        }
-	        return pageScripts;
-	    }
-
-	    public static string GetPageKey(HttpRequest request)
-	    {
-	        string key = request.Url.PathAndQuery;
-	        bool flag = key == "/";
-	        if (flag)
-	        {
-	            string contextItemId = string.Empty;
-	            if (RenderingContext.Current.ContextItem != null)
-	            {
-	                contextItemId = RenderingContext.Current.PageContext.Item?.ID.ToShortID().ToString();
-                }
-	            key = "homepage-"+ contextItemId;
-	        }
-	        else
-	        {
-	            key = request.Url.PathAndQuery.Replace("/", "_");
-	        }
-	        return key;
 	    }
 
         protected virtual string[] GetPlaceholders(string viewPath)
@@ -364,8 +328,59 @@ namespace Sitecore.React.Mvc
 			return props;
 		}
 
-        #region [Personalisation Key]
-	    public string GeneratePersonlisationKey()
+        #region [Bundling]
+
+        public static HtmlString RenderPageScripts()
+        {
+            CustomCacheService customCacheService = new CustomCacheService();
+            string bundleKey = GetBundleKey(isBundleObject: false, isBundleHtml: true);
+            return new HtmlString(customCacheService.Get<string>(bundleKey));
+        }
+
+        public static string RenderPageScriptsFresh(PageBundle pageBundle)
+        {
+            HtmlString htmlString = new HtmlString("");
+            if (pageBundle != null)
+            {
+                StringBuilder stringBuilder = new StringBuilder();
+                var info = System.Environment.NewLine + $"var bundleCount =  {pageBundle.ComponentBundle.Values.Count};" + System.Environment.NewLine;
+                stringBuilder.Append(info);
+                stringBuilder.Append("function reactClientsBootstrap(){");
+                foreach (string value in pageBundle.ComponentBundle.Values)
+                {
+                    stringBuilder.Append(value);
+                }
+                stringBuilder.Append("}");
+                TagBuilder val = new TagBuilder("script");
+                val.InnerHtml = (stringBuilder.ToString());
+                htmlString = new HtmlString(((object)val).ToString());
+            }
+            return htmlString.ToString();
+        }
+        #endregion 
+
+        #region [Keys]
+        public static string GetPageKey(HttpRequest request)
+        {
+            string key = request.Url.PathAndQuery;
+            bool flag = key == "/";
+            if (flag)
+            {
+                string contextItemId = string.Empty;
+                if (RenderingContext.Current.ContextItem != null)
+                {
+                    contextItemId = RenderingContext.Current.PageContext.Item?.ID.ToShortID().ToString();
+                }
+                key = "homepage-" + contextItemId;
+            }
+            else
+            {
+                key = request.Url.PathAndQuery.Replace("/", "_");
+            }
+            return key;
+        }
+
+        public string GeneratePersonlisationKey()
 	    {
 	        string cacheKey = string.Empty;
 
@@ -391,7 +406,53 @@ namespace Sitecore.React.Mvc
 	        return cacheKey;
 	    }
 
-	    public RenderingReference[] GetRenderingsForControl()
+        public string GeneratePagePersonlisationKey()
+        {
+            //IL_0042: Unknown result type (might be due to invalid IL or missing references)
+            //IL_0049: Expected O, but got Unknown
+            //IL_007b: Unknown result type (might be due to invalid IL or missing references)
+            string text = string.Empty;
+            try
+            {
+                List<RenderingReference> list = GetRenderingsForControl().ToList();
+                if (list.Any())
+                {
+                    foreach (RenderingReference item in list)
+                    {
+                        if (!string.IsNullOrWhiteSpace(item.RenderingItem.Conditions))
+                        {
+                            ConditionalRenderingsRuleContext val = new ConditionalRenderingsRuleContext(list, item);
+                            item.Settings.Rules.RunFirstMatching(val);
+                            string dataSource = val.Reference.Settings.DataSource;
+                            text = text + "pd:" + ((object)new ID(new Guid(dataSource)).ToShortID()).ToString();
+                        }
+                    }
+                    return text;
+                }
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Sitecore.Diagnostics.Log.Error("Sitecore.React could not identify a combined personalization key", (object)ex);
+                return text;
+            }
+        }
+
+        public static string GetBundleKey(bool isBundleObject = true, bool isBundleHtml = false)
+        {
+            string pageKey = GetPageKey(HttpContext.Current.Request);
+            if (isBundleObject)
+            {
+                return pageKey + "bundleObject";
+            }
+            if (isBundleHtml)
+            {
+                return pageKey + "bundleHtml";
+            }
+            return pageKey;
+        }
+
+        public RenderingReference[] GetRenderingsForControl()
 	    {
 	        var item = Sitecore.Context.Item;
 	        if (item != null)
