@@ -171,7 +171,7 @@ namespace Sitecore.React.Mvc
                 reactComponent.ContainerId,
                 () =>
                 {
-                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + reactComponent.RenderJavaScript() + " }" + System.Environment.NewLine);
+                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine);
                 });
 
             var bundle = GetBundle(reactComponent, renderingJavascript);
@@ -180,9 +180,21 @@ namespace Sitecore.React.Mvc
             if (!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
             {
                 bundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
-                _bundleCache.Set(bundleObjKey, bundle);
+                _bundleCache.Set(bundleObjKey, bundle);                
                 _bundleCache.Set(GetBundleKey(isBundleObject: false, isBundleHtml: true), RenderPageScriptsFresh(bundle));
             }
+        }
+
+        private string ApplyFilters(string scripts)
+        {
+            if (scripts.IndexOf("__RequestVerificationToken") > -1)
+            {
+                string pattern = @"name=\\u0022__RequestVerificationToken\\u0022 type=\\u0022hidden\\u0022 value=\\u0022([A-Za-z0-9+=/\-\\_]+?)\\u0022 /\\u003e";
+                Regex rgx = new Regex(pattern);
+                string replacement = @"name=\u0022__RequestVerificationToken\u0022 type=\u0022hidden\u0022 value=\u0022\u0022 /\u003e";
+                scripts = rgx.Replace(scripts, replacement);
+            }
+            return scripts;
         }
 
         private PageBundle GetBundle(IReactComponent reactComponent, string renderingJs)

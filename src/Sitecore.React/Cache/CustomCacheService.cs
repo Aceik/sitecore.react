@@ -11,5 +11,10 @@ namespace Sitecore.React.Cache
                 Sitecore.React.SitecoreCustomCache.Enabled)
         {
         }
+
+        public new void ClearCache(object sender, EventArgs args)
+        {
+            base.ClearCache(sender, args);
+        }
     }
 }
