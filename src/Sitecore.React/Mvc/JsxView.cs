@@ -3,12 +3,16 @@ using System.Collections.Generic;
 using System.Dynamic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
 using System.Web.Mvc;
 using System.Web.WebPages;
+using Sitecore.Data;
 using Sitecore.Extensions.StringExtensions;
+using Sitecore.Layouts;
 using Sitecore.Mvc;
+using Sitecore.Mvc.Pipelines.Response.RenderRendering;
 using Sitecore.Mvc.Presentation;
 using HtmlHelperExtensions = React.Web.Mvc.HtmlHelperExtensions;
 using IReactComponent = React.IReactComponent;
@@ -17,15 +21,18 @@ using ReactEnvironment = React.ReactEnvironment;
 using ReactNotInitialisedException = React.Exceptions.ReactNotInitialisedException;
 using TinyIoCResolutionException = React.TinyIoC.TinyIoCResolutionException;
 using Sitecore.React.Configuration;
+using Sitecore.React.Cache;
+using Sitecore.Rules.ConditionalRenderings;
+using PageContext = Sitecore.Mvc.Presentation.PageContext;
 
 namespace Sitecore.React.Mvc
 {
 	/// <summary>Represents the class used to create views that have Razor syntax.</summary>
 	public class JsxView : BuildManagerCompiledView
 	{
-		/// <summary>Gets the layout or master page.</summary>
-		/// <returns>The layout or master page.</returns>
-		public string LayoutPath { get; private set; }
+        /// <summary>Gets the layout or master page.</summary>
+        /// <returns>The layout or master page.</returns>
+        public string LayoutPath { get; private set; }
 
 		/// <summary>Gets a value that indicates whether view start files should be executed before the view.</summary>
 		/// <returns>A value that indicates whether view start files should be executed before the view.</returns>
@@ -39,13 +46,18 @@ namespace Sitecore.React.Mvc
 		/// <returns>The set of file extensions that will be used when looking up view start files.</returns>
 		public IEnumerable<string> ViewStartFileExtensions { get; private set; }
 
-		/// <summary>Initializes a new instance of the <see cref="T:System.Web.Mvc.RazorView" /> class.</summary>
-		/// <param name="controllerContext">The controller context.</param>
-		/// <param name="viewPath">The view path.</param>
-		/// <param name="layoutPath">The layout or master page.</param>
-		/// <param name="runViewStartPages">A value that indicates whether view start files should be executed before the view.</param>
-		/// <param name="viewStartFileExtensions">The set of extensions that will be used when looking up view start files.</param>
-		public JsxView(ControllerContext controllerContext, string viewPath, string layoutPath, bool runViewStartPages, IEnumerable<string> viewStartFileExtensions)
+        /// <summary>
+        /// The bundle cache was added so that we can defer load async on scripts by wrapping all JSX client side code with a bootstrap method.
+        /// </summary>
+        private static CustomCacheService _bundleCache = new CustomCacheService();
+        
+        /// <summary>Initializes a new instance of the <see cref="T:System.Web.Mvc.RazorView" /> class.</summary>
+        /// <param name="controllerContext">The controller context.</param>
+        /// <param name="viewPath">The view path.</param>
+        /// <param name="layoutPath">The layout or master page.</param>
+        /// <param name="runViewStartPages">A value that indicates whether view start files should be executed before the view.</param>
+        /// <param name="viewStartFileExtensions">The set of extensions that will be used when looking up view start files.</param>
+        public JsxView(ControllerContext controllerContext, string viewPath, string layoutPath, bool runViewStartPages, IEnumerable<string> viewStartFileExtensions)
 		  : this(controllerContext, viewPath, layoutPath, runViewStartPages, viewStartFileExtensions, null)
 		{
 		}
@@ -95,9 +107,26 @@ namespace Sitecore.React.Mvc
 			var placeholderKeys = this.GetPlaceholders(this.ViewPath);
 			var componentName = Path.GetFileNameWithoutExtension(this.ViewPath)?.Replace("-", string.Empty);
 			var props = this.GetProps(viewContext.ViewData.Model, placeholderKeys);
+		    string pageKey = GetPageKey(HttpContext.Current.Request);
 
-		    IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props);
-		    if (ReactSettingsProvider.Current.EnableClientside)
+		    var componentId = GetComponentRenderingContextKey(pageKey, componentName, String.Join("|", placeholderKeys));
+
+            IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props, componentId);
+            bool isEditingOverrideEnabled = ReactSettingsProvider.Current.DisableClientSideWhenEditing && Sitecore.Context.PageMode.IsExperienceEditorEditing;
+
+		    bool enableClientSide = ReactSettingsProvider.Current.EnableClientside && !isEditingOverrideEnabled;
+
+            // Client side bundling 
+            // Added by Thomas Tyack. https://aceik.com.au/2018/06/28/sitecore-page-speed-part-3-eliminate-js-loading-time/  
+            // Page Speed updates allowing all the javascript loading to be defered. 
+		    bool hasDynamicLoadingEnabled = Context.Item.Fields.Any(x => x.Name.Equals("EnableDynamicScriptLoadingOnPage") && x.Value == "1");
+            bool enableClientSideBundle = ReactSettingsProvider.Current.EnableGroupedClientsideScripts && hasDynamicLoadingEnabled && !isEditingOverrideEnabled;
+
+		    if (enableClientSideBundle)
+		    {
+		        writer.WriteLine(reactComponent.RenderHtml(false, true)); // Render the markup but not the client side JS yet.
+		        this.ConstructFastBundle(pageKey, reactComponent); // Add the client side JS to a bundle for rendering at the end of the page.
+            } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
 
@@ -130,7 +159,81 @@ namespace Sitecore.React.Mvc
 			}
 		}
 
-		protected virtual string[] GetPlaceholders(string viewPath)
+        /// <summary>
+        /// Adds a component to the bundle for a particular page. 
+        /// </summary>
+        /// <param name="pageKey">The Page ID</param>
+        /// <param name="reactComponent">The React component to add.</param>
+	    private void ConstructFastBundle(string pageKey, IReactComponent reactComponent)
+	    {
+            // Lookup the rendering script for this rendering
+            var renderingJavascript = _bundleCache.GetOrAddToCache(
+                reactComponent.ContainerId,
+                () =>
+                {
+                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine);
+                });
+
+            var bundle = GetBundle(reactComponent, renderingJavascript);
+            string bundleObjKey = GetBundleKey();
+
+            if (!bundle.ComponentBundle.ContainsKey(reactComponent.ContainerId))
+            {
+                bundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJavascript);
+                _bundleCache.Set(bundleObjKey, bundle);                
+                _bundleCache.Set(GetBundleKey(isBundleObject: false, isBundleHtml: true), RenderPageScriptsFresh(bundle));
+            }
+        }
+
+        private string ApplyFilters(string scripts)
+        {
+            if (scripts.IndexOf("__RequestVerificationToken") > -1)
+            {
+                string pattern = @"name=\\u0022__RequestVerificationToken\\u0022 type=\\u0022hidden\\u0022 value=\\u0022([A-Za-z0-9+=/\-\\_]+?)\\u0022 /\\u003e";
+                Regex rgx = new Regex(pattern);
+                string replacement = @"name=\u0022__RequestVerificationToken\u0022 type=\u0022hidden\u0022 value=\u0022\u0022 /\u003e";
+                scripts = rgx.Replace(scripts, replacement);
+            }
+            return scripts;
+        }
+
+        private PageBundle GetBundle(IReactComponent reactComponent, string renderingJs)
+        {
+            string bundleObjKey = GetBundleKey();
+            var currentBundle = _bundleCache.Get<PageBundle>(bundleObjKey);
+            if (currentBundle == null)
+            {
+                // Lookup the bundle see if it already exists in cache. If not create it.
+                currentBundle = _bundleCache.GetOrAddToCache<PageBundle>(
+                    bundleObjKey,
+                    () =>
+                    {
+                        var newBundle = new PageBundle() { PageKey = bundleObjKey, ComponentBundle = new Dictionary<string, string>() };
+                        newBundle.ComponentBundle.Add(reactComponent.ContainerId, renderingJs);
+                        return newBundle;
+                    });
+            }
+
+            return currentBundle;
+        }
+
+        /// <summary>
+        /// Generates a component key, for the bundling cache.
+        /// Takes into consideration content ITem, component name, databasrouce and Personalisation rules.
+        /// </summary>
+        /// <param name="pageKey"></param>
+        /// <param name="name"></param>
+        /// <param name="placeholderKeys"></param>
+        /// <returns></returns>
+        private string GetComponentRenderingContextKey(string pageKey, string name, string placeholderKeys)
+	    {
+            var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
+	        string componentId = $"{pageKey}:{name}:{datasourceId}:{GeneratePersonlisationKey()}";
+
+	        return componentId;
+	    }
+
+        protected virtual string[] GetPlaceholders(string viewPath)
 		{
 			const string noPlaceholders = "NONE";
 
@@ -236,5 +339,148 @@ namespace Sitecore.React.Mvc
 
 			return props;
 		}
-	}
+
+        #region [Bundling]
+
+        public static HtmlString RenderPageScripts()
+        {
+            CustomCacheService customCacheService = new CustomCacheService();
+            string bundleKey = GetBundleKey(isBundleObject: false, isBundleHtml: true);
+            return new HtmlString(customCacheService.Get<string>(bundleKey));
+        }
+
+        public static string RenderPageScriptsFresh(PageBundle pageBundle)
+        {
+            HtmlString htmlString = new HtmlString("");
+            if (pageBundle != null)
+            {
+                StringBuilder stringBuilder = new StringBuilder();
+                var info = System.Environment.NewLine + $"var bundleCount =  {pageBundle.ComponentBundle.Values.Count};" + System.Environment.NewLine;
+                stringBuilder.Append(info);
+                stringBuilder.Append("function reactClientsBootstrap(){");
+                foreach (string value in pageBundle.ComponentBundle.Values)
+                {
+                    stringBuilder.Append(value);
+                }
+                stringBuilder.Append("}");
+                TagBuilder val = new TagBuilder("script");
+                val.InnerHtml = (stringBuilder.ToString());
+                htmlString = new HtmlString(((object)val).ToString());
+            }
+            return htmlString.ToString();
+        }
+        #endregion 
+
+        #region [Keys]
+        public static string GetPageKey(HttpRequest request)
+        {
+            string key = request.Url.PathAndQuery;
+            bool flag = key == "/";
+            if (flag)
+            {
+                string contextItemId = string.Empty;
+                if (RenderingContext.Current.ContextItem != null)
+                {
+                    contextItemId = RenderingContext.Current.PageContext.Item?.ID.ToShortID().ToString();
+                }
+                key = "homepage-" + contextItemId;
+            }
+            else
+            {
+                key = request.Url.PathAndQuery.Replace("/", "_");
+            }
+            return key;
+        }
+
+        public string GeneratePersonlisationKey()
+	    {
+	        string cacheKey = string.Empty;
+
+	        try
+	        {
+	            var allReferences = GetRenderingsForControl().ToList();
+	            var renderingUniqueId = ID.Parse(RenderingContext.Current.Rendering.UniqueId);
+	            var renderingReferrence = allReferences.FirstOrDefault(i => ID.Parse(i.UniqueId).Equals(renderingUniqueId));
+	            if (renderingReferrence?.Settings?.Rules != null)
+	            {
+	                var ruleContext = new ConditionalRenderingsRuleContext(allReferences, renderingReferrence);
+                    if(ruleContext != null)
+                    {
+                        renderingReferrence.Settings.Rules.RunFirstMatching(ruleContext);
+                        string personalizedDatasource = ruleContext.Reference.Settings.DataSource;
+                        if(!string.IsNullOrWhiteSpace(personalizedDatasource))
+                        {
+                            cacheKey += String.Concat("pd:", new ID(new Guid(personalizedDatasource)).ToShortID().ToString());
+                        }
+                    }
+	            }
+            }
+            catch (Exception ex)
+	        {
+                Sitecore.Diagnostics.Log.Debug("Sitecore.React could not identify a personalisation for the current rendering", ex);
+	        }
+
+	        return cacheKey;
+	    }
+
+        public string GeneratePagePersonlisationKey()
+        {
+            //IL_0042: Unknown result type (might be due to invalid IL or missing references)
+            //IL_0049: Expected O, but got Unknown
+            //IL_007b: Unknown result type (might be due to invalid IL or missing references)
+            string text = string.Empty;
+            try
+            {
+                List<RenderingReference> list = GetRenderingsForControl().ToList();
+                if (list.Any())
+                {
+                    foreach (RenderingReference item in list)
+                    {
+                        if (!string.IsNullOrWhiteSpace(item.RenderingItem.Conditions))
+                        {
+                            ConditionalRenderingsRuleContext val = new ConditionalRenderingsRuleContext(list, item);
+                            item.Settings.Rules.RunFirstMatching(val);
+                            string dataSource = val.Reference.Settings.DataSource;
+                            text = text + "pd:" + ((object)new ID(new Guid(dataSource)).ToShortID()).ToString();
+                        }
+                    }
+                    return text;
+                }
+                return text;
+            }
+            catch (Exception ex)
+            {
+                Sitecore.Diagnostics.Log.Error("Sitecore.React could not identify a combined personalization key", (object)ex);
+                return text;
+            }
+        }
+
+        public static string GetBundleKey(bool isBundleObject = true, bool isBundleHtml = false)
+        {
+            string pageKey = GetPageKey(HttpContext.Current.Request);
+            if (isBundleObject)
+            {
+                return pageKey + "bundleObject";
+            }
+            if (isBundleHtml)
+            {
+                return pageKey + "bundleHtml";
+            }
+            return pageKey;
+        }
+
+        public RenderingReference[] GetRenderingsForControl()
+	    {
+	        var item = Sitecore.Context.Item;
+	        if (item != null)
+	        {
+	            var device = Sitecore.Context.Device;
+	            var renderings = item.Visualization.GetRenderings(device, true);
+
+	            return renderings;
+	        }
+	        return new RenderingReference[0];
+	    }
+        #endregion
+    }
 }
