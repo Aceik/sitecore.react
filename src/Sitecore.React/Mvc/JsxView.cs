@@ -401,18 +401,23 @@ namespace Sitecore.React.Mvc
 	            var allReferences = GetRenderingsForControl().ToList();
 	            var renderingUniqueId = ID.Parse(RenderingContext.Current.Rendering.UniqueId);
 	            var renderingReferrence = allReferences.FirstOrDefault(i => ID.Parse(i.UniqueId).Equals(renderingUniqueId));
-	            if (renderingReferrence != null)
+	            if (renderingReferrence?.Settings?.Rules != null)
 	            {
 	                var ruleContext = new ConditionalRenderingsRuleContext(allReferences, renderingReferrence);
-	                renderingReferrence.Settings.Rules.RunFirstMatching(ruleContext);
-
-	                string personalizedDatasource = ruleContext.Reference.Settings.DataSource;
-	                cacheKey += String.Concat("pd:", new ID(new Guid(personalizedDatasource)).ToShortID().ToString());
+                    if(ruleContext != null)
+                    {
+                        renderingReferrence.Settings.Rules.RunFirstMatching(ruleContext);
+                        string personalizedDatasource = ruleContext.Reference.Settings.DataSource;
+                        if(!string.IsNullOrWhiteSpace(personalizedDatasource))
+                        {
+                            cacheKey += String.Concat("pd:", new ID(new Guid(personalizedDatasource)).ToShortID().ToString());
+                        }
+                    }
 	            }
             }
             catch (Exception ex)
 	        {
-                Sitecore.Diagnostics.Log.Error("Sitecore.React could not identify a personalisation", ex);
+                Sitecore.Diagnostics.Log.Debug("Sitecore.React could not identify a personalisation for the current rendering", ex);
 	        }
 
 	        return cacheKey;
