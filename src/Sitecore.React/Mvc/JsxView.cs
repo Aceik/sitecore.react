@@ -24,6 +24,7 @@ using Sitecore.React.Configuration;
 using Sitecore.React.Cache;
 using Sitecore.Rules.ConditionalRenderings;
 using PageContext = Sitecore.Mvc.Presentation.PageContext;
+using Sitecore.React.Util;
 
 namespace Sitecore.React.Mvc
 {
@@ -125,7 +126,7 @@ namespace Sitecore.React.Mvc
 		    if (enableClientSideBundle)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml(false, true)); // Render the markup but not the client side JS yet.
-		        this.ConstructFastBundle(pageKey, reactComponent); // Add the client side JS to a bundle for rendering at the end of the page.
+		        this.ConstructFastBundle(reactComponent); // Add the client side JS to a bundle for rendering at the end of the page.
             } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
@@ -133,7 +134,7 @@ namespace Sitecore.React.Mvc
 		        var tagBuilder = new TagBuilder("script")
 		        {
 		            InnerHtml = reactComponent.RenderJavaScript()
-		        };
+                };
 
 		        writer.Write(System.Environment.NewLine);
 		        writer.Write(tagBuilder.ToString());
@@ -159,19 +160,23 @@ namespace Sitecore.React.Mvc
 			}
 		}
 
+        private string RenderJavascript(IReactComponent reactComponent)
+        {
+            return "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine;
+        }
+
         /// <summary>
         /// Adds a component to the bundle for a particular page. 
         /// </summary>
-        /// <param name="pageKey">The Page ID</param>
         /// <param name="reactComponent">The React component to add.</param>
-	    private void ConstructFastBundle(string pageKey, IReactComponent reactComponent)
+	    private void ConstructFastBundle(IReactComponent reactComponent)
 	    {
             // Lookup the rendering script for this rendering
             var renderingJavascript = _bundleCache.GetOrAddToCache(
                 reactComponent.ContainerId,
                 () =>
                 {
-                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine);
+                    return _bundleCache.GetOrAddToCache(reactComponent.ContainerId, () => RenderJavascript(reactComponent));
                 });
 
             var bundle = GetBundle(reactComponent, renderingJavascript);
@@ -364,6 +369,7 @@ namespace Sitecore.React.Mvc
                 }
                 stringBuilder.Append("}");
                 TagBuilder val = new TagBuilder("script");
+                val.Attributes.Add("defer", "defer");
                 val.InnerHtml = (stringBuilder.ToString());
                 htmlString = new HtmlString(((object)val).ToString());
             }
@@ -375,21 +381,20 @@ namespace Sitecore.React.Mvc
         public static string GetPageKey(HttpRequest request)
         {
             string key = request.Url.PathAndQuery;
-            bool flag = key == "/";
-            if (flag)
+            if (key == "/")
             {
                 string contextItemId = string.Empty;
                 if (RenderingContext.Current.ContextItem != null)
                 {
                     contextItemId = RenderingContext.Current.PageContext.Item?.ID.ToShortID().ToString();
                 }
-                key = "homepage-" + contextItemId;
+                key = $"homepage-" + contextItemId;
             }
             else
             {
-                key = request.Url.PathAndQuery.Replace("/", "_");
+                key = Sitecore.Context.Site.Name + request.Url.PathAndQuery.Replace("/", "_");
             }
-            return key;
+            return key.ToLower();
         }
 
         public string GeneratePersonlisationKey()
@@ -411,6 +416,11 @@ namespace Sitecore.React.Mvc
                         if(!string.IsNullOrWhiteSpace(personalizedDatasource))
                         {
                             cacheKey += String.Concat("pd:", new ID(new Guid(personalizedDatasource)).ToShortID().ToString());
+                            string profileMatch = GetPatterName(ruleContext, personalizedDatasource);
+                            if (!string.IsNullOrWhiteSpace(profileMatch))
+                            {
+                                cacheKey += String.Concat(":pn:", profileMatch);
+                            }
                         }
                     }
 	            }
@@ -442,6 +452,11 @@ namespace Sitecore.React.Mvc
                             item.Settings.Rules.RunFirstMatching(val);
                             string dataSource = val.Reference.Settings.DataSource;
                             text = text + "pd:" + ((object)new ID(new Guid(dataSource)).ToShortID()).ToString();
+                            string profileMatch = GetPatterName(val, dataSource);
+                            if(!string.IsNullOrWhiteSpace(profileMatch))
+                            {
+                                text = text + "pn:" + ((object)new ID(new Guid(dataSource)).ToShortID()).ToString();
+                            }
                         }
                     }
                     return text;
@@ -453,6 +468,40 @@ namespace Sitecore.React.Mvc
                 Sitecore.Diagnostics.Log.Error("Sitecore.React could not identify a combined personalization key", (object)ex);
                 return text;
             }
+        }
+
+        /// <summary>
+        /// If the rendering has rules attached lookup profile card associated with the Rule run.
+        /// Return empty if it can't be found.
+        /// </summary>
+        /// <param name="ruleContext"></param>
+        /// <param name="personalizedDatasource"></param>
+        /// <returns></returns>
+        public string GetPatterName(ConditionalRenderingsRuleContext ruleContext, string personalizedDatasource)
+        {
+            try
+            {
+                foreach (var rule in ruleContext.Reference.Settings.Rules.Rules)
+                {
+                    foreach (var action in rule.Actions)
+                    {
+                        var setDataSourceAction = action as SetDataSourceAction<ConditionalRenderingsRuleContext>;
+                        if (setDataSourceAction != null && setDataSourceAction.DataSource == personalizedDatasource)
+                        {
+                            var conditionMatch = rule.Condition as Sitecore.Analytics.Rules.Conditions.HasPatternCondition<ConditionalRenderingsRuleContext>;
+                            if (conditionMatch != null)
+                            {
+                                return conditionMatch.PatternName.ToLower().GetHashString();
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Sitecore.Diagnostics.Log.Error("Could not locate profile card match for rendering", ex);
+            }
+            return string.Empty;
         }
 
         public static string GetBundleKey(bool isBundleObject = true, bool isBundleHtml = false)
