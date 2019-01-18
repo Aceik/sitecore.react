@@ -77,8 +77,7 @@ namespace Sitecore.React.Mvc
 			this.RunViewStartPages = runViewStartPages;
 			this.ViewStartFileExtensions = viewStartFileExtensions ?? Enumerable.Empty<string>();
 		}
-
-
+        
 		/// <summary>Renders the specified view context by using the specified the writer object.</summary>
 		/// <param name="viewContext">Information related to rendering a view, such as view data, temporary data, and form context.</param>
 		/// <param name="writer">The writer object.</param>
@@ -121,12 +120,25 @@ namespace Sitecore.React.Mvc
             // Added by Thomas Tyack. https://aceik.com.au/2018/06/28/sitecore-page-speed-part-3-eliminate-js-loading-time/  
             // Page Speed updates allowing all the javascript loading to be defered. 
 		    bool hasDynamicLoadingEnabled = Context.Item.Fields.Any(x => x.Name.Equals("EnableDynamicScriptLoadingOnPage") && x.Value == "1");
-            bool enableClientSideBundle = ReactSettingsProvider.Current.EnableGroupedClientsideScripts && hasDynamicLoadingEnabled && !isEditingOverrideEnabled;
+		    bool enableClientSideBundle = ReactSettingsProvider.Current.EnableGroupedClientsideScripts && hasDynamicLoadingEnabled && !isEditingOverrideEnabled;
+		    bool enableClientSideDefer = ReactSettingsProvider.Current.EnableDeferClientsideScripts && hasDynamicLoadingEnabled && !isEditingOverrideEnabled;
 
-		    if (enableClientSideBundle)
+            if (enableClientSideBundle)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml(false, true)); // Render the markup but not the client side JS yet.
 		        this.ConstructFastBundle(reactComponent); // Add the client side JS to a bundle for rendering at the end of the page.
+            }
+		    else if(enableClientSideDefer)
+		    {
+		        writer.WriteLine(reactComponent.RenderHtml());
+		        var tagBuilder = new TagBuilder("script")
+		        {
+		            InnerHtml = RenderJavascriptSingleBoostrap(reactComponent)
+                };
+		        tagBuilder.Attributes.Add("defer", "defer");
+                writer.Write(System.Environment.NewLine);
+		        writer.Write(tagBuilder.ToString());
+
             } else if (enableClientSide)
 		    {
 		        writer.WriteLine(reactComponent.RenderHtml());
@@ -165,6 +177,12 @@ namespace Sitecore.React.Mvc
             return "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine;
         }
 
+	    private string RenderJavascriptSingleBoostrap(IReactComponent reactComponent)
+	    {
+	        string mainBody = "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine;
+	        return "reactJsxNamespace." + ApplyFunctionFilters(reactComponent.ContainerId) + " = function(){"+mainBody+"};";
+        }
+
         /// <summary>
         /// Adds a component to the bundle for a particular page. 
         /// </summary>
@@ -188,18 +206,6 @@ namespace Sitecore.React.Mvc
                 _bundleCache.Set(bundleObjKey, bundle);                
                 _bundleCache.Set(GetBundleKey(isBundleObject: false, isBundleHtml: true), RenderPageScriptsFresh(bundle));
             }
-        }
-
-        private string ApplyFilters(string scripts)
-        {
-            if (scripts.IndexOf("__RequestVerificationToken") > -1)
-            {
-                string pattern = @"name=\\u0022__RequestVerificationToken\\u0022 type=\\u0022hidden\\u0022 value=\\u0022([A-Za-z0-9+=/\-\\_]+?)\\u0022 /\\u003e";
-                Regex rgx = new Regex(pattern);
-                string replacement = @"name=\u0022__RequestVerificationToken\u0022 type=\u0022hidden\u0022 value=\u0022\u0022 /\u003e";
-                scripts = rgx.Replace(scripts, replacement);
-            }
-            return scripts;
         }
 
         private PageBundle GetBundle(IReactComponent reactComponent, string renderingJs)
@@ -518,6 +524,25 @@ namespace Sitecore.React.Mvc
             return pageKey;
         }
 
+	    private string ApplyFilters(string scripts)
+	    {
+	        if (scripts.IndexOf("__RequestVerificationToken") > -1)
+	        {
+	            string pattern = @"name=\\u0022__RequestVerificationToken\\u0022 type=\\u0022hidden\\u0022 value=\\u0022([A-Za-z0-9+=/\-\\_]+?)\\u0022 /\\u003e";
+	            Regex rgx = new Regex(pattern);
+	            string replacement = @"name=\u0022__RequestVerificationToken\u0022 type=\u0022hidden\u0022 value=\u0022\u0022 /\u003e";
+	            scripts = rgx.Replace(scripts, replacement);
+	        }
+	        return scripts;
+	    }
+
+	    private string ApplyFunctionFilters(string name)
+	    {
+	        return name.Replace(":", string.Empty);
+	    }
+
+        #endregion
+
         public RenderingReference[] GetRenderingsForControl()
 	    {
 	        var item = Sitecore.Context.Item;
@@ -530,6 +555,5 @@ namespace Sitecore.React.Mvc
 	        }
 	        return new RenderingReference[0];
 	    }
-        #endregion
     }
 }

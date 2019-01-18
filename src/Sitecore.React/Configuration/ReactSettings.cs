@@ -7,6 +7,7 @@
         public string BundleName { get; set; }
         public bool EnableClientside { get; set; }
         public bool EnableGroupedClientsideScripts { get; set; }
+        public bool EnableDeferClientsideScripts { get; set; }
         public bool DisableClientSideWhenEditing { get; set; }
         public string BundleType { get; set; }
         public string ServerScript { get; set; }
