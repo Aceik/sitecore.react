@@ -246,8 +246,7 @@ namespace Sitecore.React.Mvc
 	    {
             var datasourceId = RenderingContext.Current.Rendering?.Item?.ID.ToShortID().ToString();
 	        string componentId = $"{pageKey}:{name}:{datasourceId}:{GeneratePersonlisationKey()}";
-
-	        return componentId;
+            return componentId.Replace("-", string.Empty);
 	    }
 
         protected virtual string[] GetPlaceholders(string viewPath)
@@ -544,7 +543,7 @@ namespace Sitecore.React.Mvc
 
 	    private string ApplyFunctionFilters(string name)
 	    {
-	        return name.Replace(":", string.Empty);
+	        return name.Replace(":", string.Empty).Replace("-", string.Empty);
 	    }
 
         #endregion
