@@ -179,8 +179,14 @@ namespace Sitecore.React.Mvc
 
 	    private string RenderJavascriptSingleBoostrap(IReactComponent reactComponent)
 	    {
+            string exception1 = string.Empty;
+            if (ReactSettingsProvider.Current.Exception1Enabled && new ID(ReactSettingsProvider.Current.Exception1RenderingId) == RenderingContext.Current.Rendering?.RenderingItem?.ID)
+            {
+                exception1 = ReactSettingsProvider.Current.Exception1MinifiedInlineJs;
+            }
+
 	        string mainBody = "if(document.getElementById(\"" + reactComponent.ContainerId + "\")){" + ApplyFilters(reactComponent.RenderJavaScript()) + " }" + System.Environment.NewLine;
-	        return "reactJsxNamespace." + ApplyFunctionFilters(reactComponent.ContainerId) + " = function(){"+mainBody+"};";
+	        return exception1 + "reactJsxNamespace." + ApplyFunctionFilters(reactComponent.ContainerId) + " = function(){"+mainBody+"};";
         }
 
         /// <summary>
