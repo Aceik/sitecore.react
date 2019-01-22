@@ -15,5 +15,7 @@
         public string Exception1RenderingId { get; set; }
         public string Exception1MinifiedInlineJs { get; set; }
         public bool Exception1Enabled { get; set; }
+        public bool LayoutServerSideOnly { get; set; }
+        public string LayoutName { get; set; }
     }
 }

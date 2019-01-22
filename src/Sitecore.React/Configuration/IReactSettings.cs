@@ -16,5 +16,8 @@
         string BundleType { get; set; }
         string ServerScript { get; set; }
         string ClientScript { get; set; }
+
+        bool LayoutServerSideOnly { get; set; }
+        string LayoutName { get; set; }
     }
 }

@@ -112,6 +112,14 @@ namespace Sitecore.React.Mvc
 		    var componentId = GetComponentRenderingContextKey(pageKey, componentName, String.Join("|", placeholderKeys));
 
             IReactComponent reactComponent = this.Environment.CreateComponent($"Components.{componentName}", props, componentId);
+
+            // Main Layout as far as we can tell does not need react client side
+            if (ReactSettingsProvider.Current.LayoutServerSideOnly && componentId.ToLower().Contains(ReactSettingsProvider.Current.LayoutName.ToLower()))
+            {
+                writer.WriteLine(reactComponent.RenderHtml(renderServerOnly: true));
+                return;
+            }
+
             bool isEditingOverrideEnabled = ReactSettingsProvider.Current.DisableClientSideWhenEditing && Sitecore.Context.PageMode.IsExperienceEditorEditing;
 
 		    bool enableClientSide = ReactSettingsProvider.Current.EnableClientside && !isEditingOverrideEnabled;
