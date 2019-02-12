@@ -551,7 +551,11 @@ namespace Sitecore.React.Mvc
 
 	    private string ApplyFunctionFilters(string name)
 	    {
-	        return name.Replace(":", string.Empty).Replace("-", string.Empty);
+	        return name.Replace(":", string.Empty)
+                        .Replace("?", string.Empty)
+                        .Replace("=", string.Empty)
+                        .Replace("&", string.Empty)
+                        .Replace("-", string.Empty);
 	    }
 
         #endregion
